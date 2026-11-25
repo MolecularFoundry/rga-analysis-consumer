@@ -45,7 +45,7 @@ def get_credentials_from_env():
     return service_account.Credentials.from_service_account_file("temp_creds.json")
 
 
-def get_secret(secret_env_var, gcs_secret_name=None, sa_creds: str = None, secret_store=secret_store):
+def get_secret(secret_env_var, gcs_secret_name=None, sa_creds: str = None, secret_store=None):
     '''
     Running locally: set secret_env_var in the .env file.
     Running in the cloud: secrets are fetched from Google Secret Manager via the
@@ -56,7 +56,8 @@ def get_secret(secret_env_var, gcs_secret_name=None, sa_creds: str = None, secre
     if secret:
         return secret
     elif gcs_secret_name is not None:
-        gcs_secret_path = f"{secret_store}/{gcs_secret_name}"
+        resolved_store = secret_store or os.environ.get("SECRET_STORE")
+        gcs_secret_path = f"{resolved_store}/{gcs_secret_name}"
 
         secret = get_cloud_secret_selfauth(gcs_secret_path)
         if secret is not None:
@@ -99,33 +100,50 @@ def setup_pika_client(host, port, pw, heartbeat = 60, blocked_connection_timeout
             time.sleep(retry_delay)
 
 
-def get_raw_data(client, raw_mfid):
+def get_raw_data(client, raw_mfid, work_root="./"):
     try:
-        downloaded_files = client.datasets.download(raw_mfid, file_name = '.*.zip', output_dir = './')
+        downloaded_files = client.datasets.download(
+            raw_mfid,
+            include=["*.zip", "*.ZIP"],
+            no_record=True,
+            output_dir=work_root,
+        )
         logger.info(f"Downloaded files: {downloaded_files}")
-        extra_filt = [f for f in downloaded_files if f.endswith('.zip')]
+        extra_filt = [f for f in downloaded_files if f.lower().endswith(".zip")]
         logger.info(f"Filtered zip files: {extra_filt}")
+        if not extra_filt:
+            raise FileNotFoundError(f"No ingested .zip file found to download for dataset {raw_mfid}")
         data_zip = extra_filt[0]
 
     except Exception as e:
-        logger.error(f'Error downloading zip file with client: {e}')
-        return
-    
-    try:
-        extracted_path = os.path.basename(data_zip).removesuffix(".zip")
-        with zipfile.ZipFile(data_zip, 'r') as zf:
-            zf.extractall(extracted_path)
+        logger.error(f"Error downloading zip file with client: {e}")
+        raise
 
-        subfolder_name = Path(extracted_path).stem
-        if subfolder_name in os.listdir(extracted_path):
-            extracted_path = f'{extracted_path}/{subfolder_name}'
-            logger.info(f'Found subfolder in extract_path directory: updating directory to {extracted_path=}')
+    try:
+        extract_root = os.path.join(work_root, raw_mfid, Path(data_zip).stem)
+        os.makedirs(extract_root, exist_ok=True)
+        with zipfile.ZipFile(data_zip, "r") as zf:
+            zf.extractall(extract_root)
+
+        subfolder_name = Path(data_zip).stem
+        has_txt = any(f.endswith(".txt") and not f.startswith(".") for f in os.listdir(extract_root))
+        subdirs = [
+            d for d in os.listdir(extract_root)
+            if not d.startswith(".") and d != "__MACOSX" and os.path.isdir(os.path.join(extract_root, d))
+        ]
+        if os.path.isdir(os.path.join(extract_root, subfolder_name)):
+            extracted_path = os.path.join(extract_root, subfolder_name)
+            logger.info(f"Found subfolder in extract_root directory: updating directory to {extracted_path=}")
+        elif not has_txt and len(subdirs) == 1:
+            extracted_path = os.path.join(extract_root, subdirs[0])
+            logger.info(f"Found single nested subfolder in extract_root: updating directory to {extracted_path=}")
+        else:
+            extracted_path = extract_root
 
     except Exception as e:
-        logger.error(f'Error unzipping file: {e}')
-        return
-    
-    
+        logger.error(f"Error unzipping file: {e}")
+        raise
+
     return data_zip, extracted_path
 
 
