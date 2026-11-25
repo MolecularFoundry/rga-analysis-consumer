@@ -10,7 +10,7 @@ matplotlib
 joblib
 
 # for the crux
-nano-crucible==2.1.2
+nano-crucible>=4.0.1,<5
 
 # stuff Morgan asked me to add
 google-auth-oauthlib 

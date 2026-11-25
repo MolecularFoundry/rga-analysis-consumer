@@ -1,4 +1,4 @@
-FROM python:3.11-trixie
+FROM python:3.13-trixie
 USER root
 WORKDIR /root/
 
@@ -19,7 +19,7 @@ RUN /bin/uv sync --locked
 COPY ./src /root/
 
 # packages
-RUN uv sync
+RUN /bin/uv sync --locked
 
 # env vars
 ARG githash
